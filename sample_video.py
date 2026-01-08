@@ -3,10 +3,43 @@ import time
 from pathlib import Path
 from loguru import logger
 from datetime import datetime
+import torch
 
 from hyvideo.utils.file_utils import save_videos_grid
 from hyvideo.config import parse_args
 from hyvideo.inference import HunyuanVideoSampler
+from op_tracer import OpAndModuleTracer, EventRecorder
+
+spm_name_map = {
+    "scaled_dot_product_attention": "ScaledDotProductAttention",
+    "RMSNorm": "RMSNorm",
+    "LayerNorm": "LayerNorm",
+}
+
+def choose_module_to_trace(sampler):
+    if hasattr(sampler, "pipeline"):
+        pipeline = sampler.pipeline
+        if hasattr(pipeline, "transformer") and isinstance(pipeline.transformer, torch.nn.Module):
+            logger.info("Tracing module: pipeline.transformer")
+            return pipeline.transformer
+        if isinstance(pipeline, torch.nn.Module):
+            logger.info("Tracing module: pipeline")
+            return pipeline
+    if hasattr(sampler, "model") and isinstance(sampler.model, torch.nn.Module):
+        logger.info("Tracing module: model")
+        return sampler.model
+    candidates = [
+        (name, module)
+        for name, module in sampler.__dict__.items()
+        if isinstance(module, torch.nn.Module)
+    ]
+    if candidates:
+        name, module = max(
+            candidates, key=lambda kv: sum(p.numel() for p in kv[1].parameters(recurse=True))
+        )
+        logger.info(f"Tracing module (fallback): {name}")
+        return module
+    raise RuntimeError("No torch.nn.Module found in sampler to trace.")
 
 
 def main():
@@ -27,22 +60,46 @@ def main():
     # Get the updated args
     args = hunyuan_video_sampler.args
 
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    is_main_rank = "LOCAL_RANK" not in os.environ or local_rank == 0
+
+    tracer = None
+    recorder = None
+    if is_main_rank:
+        module_to_trace = choose_module_to_trace(hunyuan_video_sampler)
+        recorder = EventRecorder()
+        tracer = OpAndModuleTracer(
+            module_to_trace,
+            recorder,
+            spm_name_map=spm_name_map,
+            leaf_only=True,
+            capture_tensors=True,
+            max_tensors_per_event=8,
+        ).start()
+
     # Start sampling
     # TODO: batch inference check
-    outputs = hunyuan_video_sampler.predict(
-        prompt=args.prompt, 
-        height=args.video_size[0],
-        width=args.video_size[1],
-        video_length=args.video_length,
-        seed=args.seed,
-        negative_prompt=args.neg_prompt,
-        infer_steps=args.infer_steps,
-        guidance_scale=args.cfg_scale,
-        num_videos_per_prompt=args.num_videos,
-        flow_shift=args.flow_shift,
-        batch_size=args.batch_size,
-        embedded_guidance_scale=args.embedded_cfg_scale
-    )
+    try:
+        outputs = hunyuan_video_sampler.predict(
+            prompt=args.prompt, 
+            height=args.video_size[0],
+            width=args.video_size[1],
+            video_length=args.video_length,
+            seed=args.seed,
+            negative_prompt=args.neg_prompt,
+            infer_steps=args.infer_steps,
+            guidance_scale=args.cfg_scale,
+            num_videos_per_prompt=args.num_videos,
+            flow_shift=args.flow_shift,
+            batch_size=args.batch_size,
+            embedded_guidance_scale=args.embedded_cfg_scale
+        )
+    finally:
+        if tracer is not None:
+            tracer.stop()
+            trace_path = os.path.join(save_path, "trace.json")
+            recorder.save(trace_path)
+            logger.info(f"Trace saved to: {trace_path}")
     samples = outputs['samples']
     
     # Save samples
