@@ -5,4 +5,5 @@ python3 sample_video.py \
     --prompt "A cat walks on the grass, realistic style." \
     --flow-reverse \
     --use-cpu-offload \
+    --num_videos 7 \
     --save-path ./results
