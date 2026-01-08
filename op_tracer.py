@@ -366,7 +366,7 @@ def build_structure_tree_with_repeats(model: nn.Module):
 # ---------- Event recorder ----------
 
 class EventRecorder:
-    def __init__(self, is_post_process: bool = True):
+    def __init__(self, is_post_process: bool = False):
         self.trace = []
         self.model_structure = None
         self.is_post_process = is_post_process
@@ -380,7 +380,7 @@ class EventRecorder:
         structure_lines = structure_str.splitlines()
 
         # a structure tree with repeats folded in
-        structure_tree = build_structure_tree_with_repeats(model)
+        # structure_tree = build_structure_tree_with_repeats(model)
 
         cfg = getattr(model, "config", None)
 
@@ -397,10 +397,16 @@ class EventRecorder:
             except Exception:
                 # last resort: stringify
                 model_cfg = {"_repr": repr(cfg)}
+
+        # make model_cfg JSON-serializable
+        try:
+            json.dumps(model_cfg)
+        except TypeError:
+            model_cfg = {"_repr": repr(model_cfg)}
                 
         self.model_structure = {
            "structure_str": structure_lines,
-           "structure_tree": structure_tree,
+        #    "structure_tree": structure_tree,
            "model_config": model_cfg,
         #    "named_parameters": {name: id(param) for name, param in model.named_parameters()}
            }
@@ -620,7 +626,6 @@ class OpTracer(TorchDispatchMode):
         return False
 
     def is_any_parent_already_captured_by_tracer(self, parent_nn_module):
-        print(parent_nn_module)
         for m in parent_nn_module:
             if self.shared_info.get("name_mapping", {}).get(m["module_id"], {}).get("is_support", False):
                 return True

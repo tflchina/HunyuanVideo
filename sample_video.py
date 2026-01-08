@@ -9,14 +9,19 @@ from hyvideo.utils.file_utils import save_videos_grid
 from hyvideo.config import parse_args
 from hyvideo.inference import HunyuanVideoSampler
 from op_tracer import OpAndModuleTracer, EventRecorder
+import pdb
 
 spm_name_map = {
-    "scaled_dot_product_attention": "ScaledDotProductAttention",
+    "_scaled_dot_product_efficient_attention": "ScaledDotProductAttention",
     "RMSNorm": "RMSNorm",
     "LayerNorm": "LayerNorm",
 }
 
 def choose_module_to_trace(sampler):
+    if hasattr(sampler, "model") and isinstance(sampler.model, torch.nn.Module):
+        logger.info("Tracing module: model")
+        return sampler.model
+
     if hasattr(sampler, "pipeline"):
         pipeline = sampler.pipeline
         if hasattr(pipeline, "transformer") and isinstance(pipeline.transformer, torch.nn.Module):
@@ -25,9 +30,7 @@ def choose_module_to_trace(sampler):
         if isinstance(pipeline, torch.nn.Module):
             logger.info("Tracing module: pipeline")
             return pipeline
-    if hasattr(sampler, "model") and isinstance(sampler.model, torch.nn.Module):
-        logger.info("Tracing module: model")
-        return sampler.model
+
     candidates = [
         (name, module)
         for name, module in sampler.__dict__.items()
@@ -71,6 +74,7 @@ def main():
     recorder = None
     if is_main_rank:
         module_to_trace = choose_module_to_trace(hunyuan_video_sampler)
+        print(module_to_trace)
         recorder = EventRecorder()
         tracer = OpAndModuleTracer(
             module_to_trace,
