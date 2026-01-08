@@ -63,6 +63,10 @@ def main():
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     is_main_rank = "LOCAL_RANK" not in os.environ or local_rank == 0
 
+    model_params = {"shape_params": [
+    {"name": "batch_size", "value": 7},
+    {"name": "seq_length", "value": 10800},]} 
+
     tracer = None
     recorder = None
     if is_main_rank:
@@ -72,6 +76,7 @@ def main():
             module_to_trace,
             recorder,
             spm_name_map=spm_name_map,
+            model_params=model_params,
             leaf_only=True,
             capture_tensors=True,
             max_tensors_per_event=8,
